@@ -1,0 +1,119 @@
+{
+    "username": "jkobler",
+    "owner": {
+        "id": 1172068,
+        "username": "jkobler"
+    },
+    "id": 1329263,
+    "key": "green-thumb",
+    "name": "Green Thumb",
+    "machine_name": null,
+    "wipper_semver": null,
+    "description": "",
+    "visibility": "private",
+    "created_at": "2026-01-02T19:41:37Z",
+    "updated_at": "2026-01-02T21:49:31Z",
+    "is_shared": false,
+    "feeds": [
+        {
+            "username": "jkobler",
+            "owner": {
+                "id": 1172068,
+                "username": "jkobler"
+            },
+            "id": 3273560,
+            "name": "Green Threshold",
+            "user_id": 1172068,
+            "unit_type": null,
+            "unit_symbol": null,
+            "history": true,
+            "last_value": "600",
+            "visibility": "private",
+            "created_at": "2026-01-02T21:49:17Z",
+            "updated_at": "2026-01-02T21:56:36Z",
+            "enabled": true,
+            "wipper_pin_info": null,
+            "key": "green-thumb.green-threshold"
+        },
+        {
+            "username": "jkobler",
+            "owner": {
+                "id": 1172068,
+                "username": "jkobler"
+            },
+            "id": 3273473,
+            "name": "Light Status",
+            "user_id": 1172068,
+            "unit_type": null,
+            "unit_symbol": null,
+            "history": true,
+            "last_value": "Y",
+            "visibility": "private",
+            "created_at": "2026-01-02T19:42:38Z",
+            "updated_at": "2026-01-02T22:29:33Z",
+            "enabled": true,
+            "wipper_pin_info": null,
+            "key": "green-thumb.light-status"
+        },
+        {
+            "username": "jkobler",
+            "owner": {
+                "id": 1172068,
+                "username": "jkobler"
+            },
+            "id": 3273471,
+            "name": "Moisture Level",
+            "user_id": 1172068,
+            "unit_type": null,
+            "unit_symbol": null,
+            "history": true,
+            "last_value": "590",
+            "visibility": "public",
+            "created_at": "2026-01-02T19:42:03Z",
+            "updated_at": "2026-01-02T22:29:33Z",
+            "enabled": true,
+            "wipper_pin_info": null,
+            "key": "green-thumb.moisture-level"
+        },
+        {
+            "username": "jkobler",
+            "owner": {
+                "id": 1172068,
+                "username": "jkobler"
+            },
+            "id": 3273472,
+            "name": "Temperature",
+            "user_id": 1172068,
+            "unit_type": null,
+            "unit_symbol": null,
+            "history": true,
+            "last_value": "77",
+            "visibility": "public",
+            "created_at": "2026-01-02T19:42:18Z",
+            "updated_at": "2026-01-02T22:29:33Z",
+            "enabled": true,
+            "wipper_pin_info": null,
+            "key": "green-thumb.temperature"
+        },
+        {
+            "username": "jkobler",
+            "owner": {
+                "id": 1172068,
+                "username": "jkobler"
+            },
+            "id": 3273561,
+            "name": "Yellow Threshold",
+            "user_id": 1172068,
+            "unit_type": null,
+            "unit_symbol": null,
+            "history": true,
+            "last_value": "450",
+            "visibility": "private",
+            "created_at": "2026-01-02T21:49:31Z",
+            "updated_at": "2026-01-02T21:58:39Z",
+            "enabled": true,
+            "wipper_pin_info": null,
+            "key": "green-thumb.yellow-threshold"
+        }
+    ]
+}
