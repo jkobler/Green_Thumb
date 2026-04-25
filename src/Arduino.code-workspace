@@ -1,0 +1,28 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "plant_minder",
+			"path": "../../plant_minder"
+		},
+		{
+			"name": "Green_Thumb",
+			"path": ".."
+		},
+		{
+			"name": "esp32_wifi_test",
+			"path": "../../esp32_wifi_test"
+		},
+		{
+			"name": "Minibike_Dash_System",
+			"path": "../../Minibike_Dash_System"
+		},
+		{
+			"name": "TFT Featherwing Example",
+			"path": "../../TFT Featherwing Example"
+		}
+	],
+	"settings": {}
+}
