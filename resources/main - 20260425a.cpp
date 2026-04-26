@@ -2,27 +2,6 @@
 //#define DEBUG2
 
 
-/*
-Google AI ideas I liked...
-
-Ideas for the "Touch" Action
-Since you have an ESP32-S3 (WiFi capable), even if you don't have more local sensors, 
-you can pull external data. Here are a few "low-hardware" ideas for what happens when 
-you tap a plant icon:
-Calibration Mode: Tapping a plant could trigger a 5-second "High/Low" read. You could 
-put the sensor in bone-dry soil, tap it, then in a cup of water and tap it, to 
-automatically set your greenThreshold and yellowThreshold.
-Weather Context: Tapping could show a "Weather Sync." If the ESP32 knows it’s going to 
-be 95°F (35°C) tomorrow via a weather API, it could highlight the moisture data in 
-Orange to warn you it'll dry out fast.
-Watering History: You could add a lastWatered timestamp to your soilSensor struct. 
-Tapping the face "resets" the timer, telling the system "I just watered this." The 
-emoji could then stay happy for a set number of hours regardless of the capacitance 
-reading while the water "settles" in the soil.
-
-
-*/
-
 #include "Arduino.h"
 #include "WiFi.h"
 #include "config.h"
@@ -94,12 +73,9 @@ File green_thumb_conf;
 Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_TSC2007 ts = Adafruit_TSC2007();
 int16_t min_x, max_x, min_y, max_y;
-volatile long tsWhere_x,tsWhere_y;
-//volatile int16_t tsPressure;
-//volatile bool tsTouched = false;
-volatile long lastTouchTime = 0;
-const uint16_t touchCoolDown = 300;
-const uint16_t eachFace = 140;
+volatile int16_t tsWhere_x,tsWhere_y,tsPressure;
+volatile bool tsTouched = false;
+
 
 //const int ss_addr = 0x36;
 const int ts_addr = 0x48;
@@ -114,16 +90,12 @@ const uint8_t postThreshold = 5;
 volatile uint8_t onLED;
 
 uint8_t brightnessLevel = 128;
-//volatile uint8_t currentBrightness = 0;
-//volatile bool brightnessUp = true;
-uint16_t delayTime = 500;
-//volatile uint16_t iterCount = 0;
+uint16_t delayTime = 600;
 
 // volatile uint8_t lastTempC=255;
 // volatile uint16_t lastCapread=4000;
 volatile uint8_t lastHour = 0;
 volatile uint8_t lastMinute = 0;
-volatile uint8_t lastSecond = 0;
 volatile uint8_t thisSecond;
 volatile uint16_t thisYear;
 volatile uint8_t thisMonth;
@@ -146,9 +118,7 @@ struct soilSensor {
     Adafruit_seesaw sensor;
     int muxAddr;
     uint8_t port;
-    volatile bool isOnline;
-    long xloc;
-    long yloc;
+    bool isOnline;
 //    float tempC;
 //    uint16_t capread;
 //    char status;
@@ -203,7 +173,7 @@ void setup() {
     }
 #endif
 
-    //Wire.setClock(100000); // Drop to 100kHz if things get jumpy
+
  
     tft.begin();
 
@@ -220,60 +190,44 @@ void setup() {
 #ifdef DEBUG    
     Serial.println("GREEN THUMB - Ver 20260425c");
 #endif
-    
-    tft.setFont(&FreeSans9pt7b);    
 
-#ifdef DEBUG    
-    Serial.print("Initializing Touchscreen...");
-#endif
-    tft.print("Initializing Touchscreen...");
     if (! ts.begin(0x48, &Wire)) {
     #ifdef DEBUG
-        Serial.println("failed!");
+        Serial.println("Couldn't start TSC2007 touchscreen controller");
     #endif
-        tft.println("failed!");
-        delay(100);
+        while (1) delay(100);
     }
     min_x = TSC_TS_MINX; max_x = TSC_TS_MAXX;
     min_y = TSC_TS_MINY; max_y = TSC_TS_MAXY;
 
     pinMode(TSC_IRQ, INPUT);
     #ifdef DEBUG
-        Serial.println("done.");
+        Serial.println("Touchscreen started");
     #endif
-    tft.println("done.");
+    
+    tft.setFont(&FreeSans9pt7b);    
     // WiFi.mode(WIFI_STA);
     // WiFi.setHostname("GreenThumbProject");
 
 #ifdef DEBUG    
     Serial.print("Initializing SD card...");
 #endif
-    tft.print("Initializing SD card...");
         // Initialize the SD card
     if (!SD.begin(SD_CS)) {
 #ifdef DEBUG   
-        Serial.println("failed!");
+        Serial.println("initialization failed!");
 #endif
-        tft.println("failed");
         return;
     }
 #ifdef DEBUG   
-    Serial.println("done.");
+    Serial.println("initialization done.");
 #endif
-    tft.println("done.");
 
-#ifdef DEBUG   
-    Serial.print("initialization Soil Sensors...");
-#endif
-    tft.print("Initializing Soil Sensors...");
+    tft.print("Initializing Soil Sensors:");
     // soilSensors.reserve(10);
     // plantGroups.reserve(10);
     readConfig();
-#ifdef DEBUG  
-    Serial.println("done.");
-#endif
-    tft.print("done.");
-
+    Serial.println("initialization done.");
 
     WiFi.begin(WIFI_SSID,WIFI_PASS);
 #ifdef DEBUG
@@ -307,7 +261,7 @@ void setup() {
 #endif
     tft.println("Time synchronized using configTime().");
 
-    //attachInterrupt(TSC_IRQ,handleTouchScreen,FALLING);
+    attachInterrupt(TSC_IRQ,handleTouchScreen,FALLING);
 
     fadeInLights(ledGreen, brightnessLevel, delayTime);
     fadeOutLights(ledGreen, brightnessLevel, delayTime);
@@ -319,6 +273,11 @@ void setup() {
 }
 
 void loop() {
+#ifdef DEBUG2
+    Serial.print("Loop");
+    delay(200);
+#endif
+
     struct tm timeinfo;
     getLocalTime(&timeinfo);
     uint8_t thisHour = timeinfo.tm_hour;
@@ -329,23 +288,11 @@ void loop() {
     thisDay = timeinfo.tm_mday;
     int isDST = timeinfo.tm_isdst;
 
-    TS_Point p = ts.getPoint();
-
-    if (p.z > 200 && (millis() - lastTouchTime > touchCoolDown)) {
-        lastTouchTime = millis();
-
-        tsWhere_x = map(p.x, TSC_TS_MINX, TSC_TS_MAXX, 0, screenWidth);
-        tsWhere_y = map(p.y, TSC_TS_MINY, TSC_TS_MAXY, 0, screenHeight);
-        
+    if (tsTouched == 1) {
 #ifdef DEBUG
-        Serial.print("Touched at point ");
-        Serial.print(tsWhere_x);
-        Serial.print(",");
-        Serial.println(tsWhere_y);
-
+        Serial.printf("Touched at point %d,%d; Pressure: %d \n", tsWhere_x, tsWhere_y, tsPressure);
+        tsTouched = 0;
 #endif
-
-//        tsTouched = false;
     }
 
 
@@ -378,28 +325,31 @@ void loop() {
 
         updateDisplay( thisHour,thisMinute,thisYear,thisMonth,thisDay);
         lastMinute = thisMinute;
-
-        constantLights(onLED, 0, brightnessLevel);
-        switch(lightStatus) {
-        case 'G':
-            onLED= ledGreen;
-            break;
-        case 'Y':
-            onLED= ledYellow;
-            break;
-        default:
-            onLED= ledRed;
-        }   
-        constantLights(onLED, 1, brightnessLevel);
     }
 
+    switch(lightStatus) {
+    case 'G':
+        fadeOutLights(onLED, brightnessLevel, delayTime);
+        onLED= ledRed;
+        fadeInLights(onLED, brightnessLevel, delayTime);
+         break;
+    case 'Y':
+        fadeOutLights(onLED, brightnessLevel, delayTime);
+        onLED= ledYellow;
+        fadeInLights(onLED, brightnessLevel, delayTime); 
+        break;
+    default:
+        fadeOutLights(onLED, brightnessLevel, delayTime);
+        onLED= ledGreen;
+        fadeInLights(onLED, brightnessLevel, delayTime);
+    }
 
 
 }
 
 
 bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint8_t thisMonth,uint8_t thisDay) {
-    uint16_t currentX , currentY;//, spacingX, spacingY, eachFace;
+    uint16_t currentX , currentY, spacingX, spacingY, eachFace;
     tft.fillScreen(BLACK);
     tft.setTextColor(CYAN);
     tft.setCursor(5, 30);
@@ -409,22 +359,23 @@ bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint
     
     currentX = 10;
     currentY= 50;
-    //eachFace = 140;
-    // spacingX=screenWidth/eachFace;
-    // spacingY=(screenHeight/eachFace)+25;
+    eachFace = 140;
+    spacingX=screenWidth/eachFace;
+    spacingY=(screenHeight/eachFace)+25;
 
     float tempAvg = 0;
     uint8_t sensorCount = 0;
 
 //    tft.setFont(&FreeSansBold12pt7b);    
     lightStatus = 'G';
-    for(auto &ss : soilSensors) {
+    for(auto ss : soilSensors) {
         if (ss.isOnline) {
             pcaselect(ss.muxAddr, ss.port);
             uint16_t capread = ss.sensor.touchRead(0);
             float temp = ss.sensor.getTemp();
             uint16_t greenThreshold,yellowThreshold,overWaterThreshold;
             char status = 'R';
+            lightStatus = 'G';
             if ( ! useCelcius ) {
                 temp = (temp*1.8) + 32 + temperatureOffset;
             }
@@ -449,17 +400,18 @@ bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint
 
             if (capread < yellowThreshold ) {
                 status = 'R';
-                lightStatus = 'R';
+                if (lightStatus != 'R')
+                    lightStatus = 'R';
             }
             else if (capread < greenThreshold ) {
                 status = 'Y';
-                if (lightStatus != 'R')
+                if (lightStatus != 'R' && lightStatus != 'B')
                     lightStatus = 'Y';
             }
             else if (capread > overWaterThreshold) {
                 status = 'B';
-                if (lightStatus != 'R')
-                    lightStatus = 'Y';
+                if (lightStatus != 'Y' && lightStatus != 'R')
+                    lightStatus = 'B';
             }
             else {
                 status = 'G';
@@ -488,15 +440,12 @@ bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint
             Serial.println(screenHeight);
             
     #endif
-            ss.xloc=currentX;
-            ss.yloc=currentY;
             drawFaceStatus(currentX,currentY,1,status,ss.name,temp,capread);
             currentX += eachFace;
             if (currentX+eachFace+10 > screenWidth) {
                 currentX = 10;
                 currentY += eachFace;
             }
-
         }
     }
     
@@ -579,10 +528,110 @@ void printMessage(int16_t locX, int16_t locY, String message, bool isErrorMessag
     tft.println(message);
 }
 
-// void IRAM_ATTR handleTouchScreen() {
-//     tsTouched = 1;
+/*
+bool postDataToFeed(uint8_t tempC, uint16_t capread) {
+    const char* host = "io.adafruit.com";
+    const int port = 80; // Use 443 with WiFiClientSecure for SSL
+    if (!client.connect(host, port)) {
+#ifdef DEBUG
+        Serial.println("Connection to Adafruit IO failed.");
+#endif
+        updateDisplay(lastHour, lastMinute,thisYear,thisMonth,thisDay,lastTempC,lastCapread,lightStatus,"Connection to Adafruit IO failed.",true);
+        return false;
+    }
 
-// }    
+    // Build the bulk update URL for your group
+    // Replace 'green-thumb' with your actual group key if it's different
+    String url = "/api/v2/" + String(IO_USERNAME) + "/groups/green-thumb/data";
+
+    // Create a JSON payload with all three feed keys and values
+    String body = "{\"feeds\": [";
+    body += "{\"key\": \"temperature\", \"value\": \"" + String(tempC) + "\"},";
+    body += "{\"key\": \"moisture-level\", \"value\": \"" + String(capread) + "\"},";
+    body += "{\"key\": \"light-status\", \"value\": \"" + String(lightStatus) + "\"}";
+    body += "]}";
+
+    // Send a single HTTP POST
+    client.print(String("POST ") + url + " HTTP/1.1\r\n" +
+                 "Host: " + host + "\r\n" +
+                 "X-AIO-Key: " + IO_KEY + "\r\n" +
+                 "Content-Type: application/json\r\n" +
+                 "Content-Length: " + body.length() + "\r\n" +
+                 "Connection: close\r\n\r\n" +
+                 body);
+
+    // Wait for the server to process (essential for reliable delivery)
+    unsigned long timeout = millis();
+    while (client.available() == 0) {
+        if (millis() - timeout > 5000) {
+            client.stop();
+            return false;
+        }
+    }
+
+    client.stop();
+    return true;
+}
+*/
+
+/*
+bool updateThresholds(uint16_t &green, uint16_t &yellow) {
+    const char* host = "io.adafruit.com";
+    String url = "/api/v2/" + String(IO_USERNAME) + "/groups/green-thumb";
+
+    if (!client.connect(host, 80)){
+
+#ifdef DEBUG
+        Serial.println("Connection to Adafruit IO failed.");
+#endif
+
+        updateDisplay(lastHour, lastMinute,thisYear,thisMonth,thisDay,lastTempC,lastCapread,lightStatus,"Connection to Adafruit IO failed.",true);
+        return false;
+    }
+
+    client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+                 "Host: " + host + "\r\n" +
+                 "X-AIO-Key: " + IO_KEY + "\r\n" +
+                 "Connection: close\r\n\r\n");
+
+    // Skip headers
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line == "\r") break;
+    }
+
+    String body = client.readString();
+    client.stop();
+#ifdef DEBUG2
+    Serial.print("What was returned: ");
+    Serial.println(body);
+#endif
+    // Simple parsing logic for two known feeds
+    auto parseVal = [&](String name) {
+        int kIdx = body.indexOf("\"name\":\"" + name + "\"");
+        int vIdx = body.indexOf("\"last_value\":\"", kIdx);
+        if (vIdx == -1) return 0L;
+        int start = vIdx + 14;
+        int end = body.indexOf("\"", start);
+        return body.substring(start, end).toInt();
+    };
+
+    green = parseVal("Green Threshold");
+    yellow = parseVal("Yellow Threshold");
+#ifdef DEBUG    
+    Serial.printf("Updated Thresholds -> Green: %d, Yellow: %d\n", green, yellow);
+#endif
+    return true;
+}
+*/
+
+void handleTouchScreen() {
+    TS_Point p = ts.getPoint();
+    tsWhere_x = map(p.x, TSC_TS_MINX, TSC_TS_MAXX, 0, screenWidth);
+    tsWhere_y = map(p.y, TSC_TS_MINY, TSC_TS_MAXY, 0, screenHeight);
+    tsPressure = p.z;
+    tsTouched = 1;
+}    
 
 
 void printWifiStatus() {
@@ -675,7 +724,11 @@ bool readConfig() {
 #ifdef DEBUG
             Serial.println("soilsensor");
 #endif       
+            // String name="";
+            // String groupname="";
+            // String value="";     
 
+//            columnIdx = 0;
             idx1 = line.indexOf('=')+1;
             idx2 = line.indexOf(',');
 
@@ -691,7 +744,31 @@ bool readConfig() {
             value=line.substring(idx1);
             port_number = (uint8_t)value.toInt();
 
+//             for (int i =11; i<line.length(); i++) {
 
+
+
+//                 if (line.charAt(i) == ',') {
+                  
+//                     if (columnIdx == 0) 
+//                         name = line.substring(idx1,i);
+//                     else if (columnIdx == 1) 
+//                         groupname = line.substring(idx1,i);
+//                     else if (columnIdx == 2) {
+//                         value = line.substring(idx1,i);
+//                         mux_addr = (int)strtol(value.c_str(), NULL, 0); 
+//                     }
+//                     idx1 = i+1;
+//                     columnIdx++;
+//                 }
+// #ifdef DEBUG2
+//                 Serial.printf("idx1=%d; i=%d; columnIdx=%d;\n",idx1,i,columnIdx);
+// #endif
+//             } 
+//             if (columnIdx == 3) {
+//                 value = line.substring(idx1);
+//                 port_number = (uint8_t)value.toInt();
+//             }
 #ifdef DEBUG
             Serial.printf("name=%s; plant group=%s; mux_addr=%x; port_number=%d;\n",name.c_str(),groupname.c_str(),mux_addr,port_number);
 #endif
@@ -727,7 +804,9 @@ bool readConfig() {
         if (line.indexOf("plantgroup=") > -1) {
 #ifdef DEBUG
             Serial.println("plantgroup");
-#endif             
+#endif             //;plantgroup=plant group name,green threshold,yellow threshold,over-water threshold
+            //columnIdx = 0;
+            //idx1 = 11;
             idx1 = line.indexOf('=')+1;
             idx2 = line.indexOf(',');
 
@@ -749,6 +828,29 @@ bool readConfig() {
  
  
  
+//             for (int i =11; i<line.length(); i++) {
+//                 if (line.charAt(i) == ',') {
+//                     if (columnIdx == 0) 
+//                         groupname = line.substring(idx1,i);
+//                     else if (columnIdx == 1) {
+//                         value = line.substring(idx1,i);
+//                         greenThreshold = (uint16_t)value.toInt();
+//                     }
+//                     else if (columnIdx == 2) {
+//                         value = line.substring(idx1,i);
+//                         yellowThreshold = (uint16_t)value.toInt();
+//                     }                    
+//                     idx1 = i+1;
+//                     columnIdx++;
+//                 }
+// #ifdef DEBUG2
+//                 Serial.printf("idx1=%d; i=%d; columnIdx=%d;\n",idx1,i,columnIdx);
+// #endif
+//             } 
+//             if (columnIdx == 3) {
+//                 value = line.substring(idx1);
+//                 overWaterThreshold = (uint16_t)value.toInt();
+//             }
 #ifdef DEBUG
             Serial.printf("plant group=%s; green threshold=%u; yellow threshold=%u; ,over-water threshold=%u;\n",groupname.c_str(),greenThreshold,yellowThreshold,overWaterThreshold);
 #endif
@@ -777,3 +879,65 @@ void pcaselect(int mux_addr, uint8_t port) {
     Wire.endTransmission();
 }
 
+
+
+
+// void getSensorData() {
+//     //   uint8_t tempC = (soilSensor.getTemp()*1.8)+27;
+//     //   uint16_t capread = soilSensor.touchRead(0);
+//     uint16_t greenThreshold,yellowThreshold,overWaterThreshold;
+//     for(auto ss : soilSensors) {
+//         if (ss.isOnline) {
+//             pcaselect(ss.muxAddr, ss.port);
+//             ss.capread = ss.sensor.touchRead(0);
+//             ss.tempC = ss.sensor.getTemp();
+
+//             for(auto pg : plantGroups) {
+//                 if (pg.name == ss.group) {
+//                     greenThreshold = pg.greenThreshold;
+//                     yellowThreshold = pg.yellowThreshold;
+//                     overWaterThreshold = pg.overWaterThreshold;
+//                     break;
+//                 }
+//                 else {
+//                     //use default
+//                     greenThreshold = 450;
+//                     yellowThreshold = 200;
+//                 }
+//             }
+
+            
+//             if (ss.capread < yellowThreshold ) {
+//                 ss.status = 'R';
+//                 if (lightStatus != 'R')
+//                     lightStatus = 'R';
+//             }
+//             else if (ss.capread < greenThreshold ) {
+//                 ss.status = 'Y';
+//                 if (lightStatus != 'Y' && lightStatus != 'R')
+//                     lightStatus = 'Y';
+//             }
+//             else if (ss.capread > overWaterThreshold) {
+//                 ss.status = 'R';
+//                 if (lightStatus != 'Y' && lightStatus != 'R')
+//                     lightStatus = 'Y';
+//             }
+//             else {
+//                 ss.status = 'G';
+//                 if (lightStatus != 'Y' && lightStatus != 'R') 
+//                     lightStatus = 'G';
+//             }
+
+// // #ifdef DEBUG
+// //             Serial.print("ss.name: ");
+// //             Serial.print(ss.name);
+// //             Serial.print("; ss.status: ");
+// //             Serial.print(ss.status);
+// //             Serial.print("; ss.capread: ");
+// //             Serial.print(ss.capread);
+// //             Serial.print("; ss.tempC: ");
+// //             Serial.println(ss.tempC);
+// // #endif            
+//         }
+//     }
+//}
