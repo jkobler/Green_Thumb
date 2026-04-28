@@ -42,6 +42,7 @@ reading while the water "settles" in the soil.
 #include "fonts/FreeSansBold12pt7b.h"
 #include "Fonts/FreeSansBold18pt7b.h"
 
+#include "bitmaps.h"
 
 
 #define STMPE_CS 6// 32 //D6 GPIO6 0x001C IRQ for touch screen
@@ -73,15 +74,20 @@ reading while the water "settles" in the soil.
 #define GREENYELLOW 0xAFE5
 #define PINK 0xFC18
 
-void handleTouchScreen();
-void printWifiStatus();
+void handleTouchScreen(long whereX, long whereY);
+void printWifiStatus(int16_t locY, bool showBackButton);
 void digitalClockDisplay(time_t now);
 void printDigits(int digits);
 bool postDataToFeed(uint8_t tempC,uint16_t capread);
 //bool updateThresholds(uint16_t &green, uint16_t &yellow);
 bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint8_t thisMonth,uint8_t thisDay);
+void showBack();
+void showHome();
+void showConfig(bool needsUpdate);
+void showPlantDetails(bool needsUpdate);
+void showGroupDetails(bool needsUpdate);
 void printMessage(int16_t locX, int16_t locY, String message, bool isErrorMessage);
-void drawFaceStatus(int16_t locX, int16_t locY, float sizePrecentage, char lightStatus_l, String plantName, float temp, uint16_t capread );
+void drawFaceStatus(int16_t locX, int16_t locY, char lightStatus_l, String plantName, float temp, uint16_t capread );
 bool readConfig();
 void pcaselect(int mux_addr, uint8_t port);
 void getSensorData();
@@ -99,7 +105,18 @@ volatile long tsWhere_x,tsWhere_y;
 //volatile bool tsTouched = false;
 volatile long lastTouchTime = 0;
 const uint16_t touchCoolDown = 300;
-const uint16_t eachFace = 140;
+const uint16_t eachFaceX = 130;
+const uint16_t eachFaceY = face_size_y + 35;
+
+uint8_t displayContext = 0;
+uint8_t selectedIdx = 0;
+
+// #define DISPLAY_HOME 0;
+// #define DISPLAY_CONFIG 1;
+// #define DISPLAY_PLANT 2;
+// #define DISPLAY_GROUP 3;
+
+
 
 //const int ss_addr = 0x36;
 const int ts_addr = 0x48;
@@ -140,21 +157,21 @@ int screenHeight;
 
 uint8_t screenRotation = 3;
 
+
 struct soilSensor {
+    uint8_t idx;
     String name;
     String group;
     Adafruit_seesaw sensor;
     int muxAddr;
     uint8_t port;
-    volatile bool isOnline;
+    bool isOnline;
     long xloc;
     long yloc;
-//    float tempC;
-//    uint16_t capread;
-//    char status;
 } ;
 
 struct plantGroup {
+    uint8_t idx;
     String name;
     uint16_t greenThreshold;
     uint16_t yellowThreshold;
@@ -216,9 +233,9 @@ void setup() {
     tft.fillScreen(BLACK);
     tft.setTextColor(GREEN);
     tft.setCursor(5, 17);
-    tft.println("GREEN THUMB - Ver 20260425c");
+    tft.println("GREEN THUMB - Ver 20260427a");
 #ifdef DEBUG    
-    Serial.println("GREEN THUMB - Ver 20260425c");
+    Serial.println("GREEN THUMB - Ver 20260427a");
 #endif
     
     tft.setFont(&FreeSans9pt7b);    
@@ -297,7 +314,7 @@ void setup() {
 #endif
     tft.println("Connected to WiFi");
     delay(1000);
-    printWifiStatus();
+    printWifiStatus(15,false);
     blinkyLights(ledGreen,brightnessLevel,1000);
 
     configTime(utcOffsetInSeconds, 3600, ntpServer); 
@@ -328,72 +345,148 @@ void loop() {
     thisMonth = timeinfo.tm_mon+1;
     thisDay = timeinfo.tm_mday;
     int isDST = timeinfo.tm_isdst;
+    uint8_t lastDisplayContext = displayContext;
+    uint8_t lastSelectedIdx = selectedIdx;
 
     TS_Point p = ts.getPoint();
-
     if (p.z > 200 && (millis() - lastTouchTime > touchCoolDown)) {
         lastTouchTime = millis();
-
-        tsWhere_x = map(p.x, TSC_TS_MINX, TSC_TS_MAXX, 0, screenWidth);
-        tsWhere_y = map(p.y, TSC_TS_MINY, TSC_TS_MAXY, 0, screenHeight);
+        //reversed because screen rotation
+        tsWhere_y = map(p.x, TSC_TS_MINX, TSC_TS_MAXX, 0, screenHeight );
+        tsWhere_x = screenWidth-map(p.y, TSC_TS_MINY, TSC_TS_MAXY, 0, screenWidth );
         
 #ifdef DEBUG
         Serial.print("Touched at point ");
         Serial.print(tsWhere_x);
         Serial.print(",");
-        Serial.println(tsWhere_y);
+        Serial.print(tsWhere_y);
+        Serial.print("; ");
+        Serial.print(p.x);
+        Serial.print(",");
+        Serial.println(p.y);
 
 #endif
+        handleTouchScreen(tsWhere_x,tsWhere_y);
 
 //        tsTouched = false;
     }
 
+    bool needsUpdate = lastDisplayContext != displayContext 
+        || ( lastDisplayContext == displayContext && lastSelectedIdx != selectedIdx);
 
-    if (lastMinute != thisMinute) {
+    switch (displayContext) {
+    case 1: //config
+            showConfig(needsUpdate);
+    break;
+    case 2: //plant details
+            showPlantDetails(needsUpdate);
+    break;
+    case 3: //group details
+            showGroupDetails(needsUpdate);
+    break;
+    default: //home
+        selectedIdx = 0;
+        if (lastMinute != thisMinute || lastDisplayContext != 0) {
 
 #ifdef DEBUG
-        Serial.println();
-        Serial.printf("%d-%02d-%02d %02d:%02d\n", thisYear, thisMonth, thisDay, thisHour, thisMinute);
+            Serial.println();
+            Serial.printf("%d-%02d-%02d %02d:%02d\n", thisYear, thisMonth, thisDay, thisHour, thisMinute);
 #endif
 
-//        getSensorData();
+
+    //        sentTheData = postDataToFeed(tempC,capread);
+
+    // #ifdef DEBUG
+    //         if (sentTheData==true) 
+    //             Serial.println("Sent data.");
+    //         else 
+    //             Serial.println("Didn't send data.");
+    // #endif
+
+            if (thisHour != lastHour) 
+                lastHour = thisHour;
+
+            if (thisMinute == 30) 
+                didTheHalfHour = 1;
+            else 
+                didTheHalfHour = 0;
+
+            updateDisplay( thisHour,thisMinute,thisYear,thisMonth,thisDay);
+            lastMinute = thisMinute;
+            constantLights(onLED, 0, brightnessLevel);
+            switch(lightStatus) {
+            case 'G':
+                onLED= ledGreen;
+                break;
+            case 'Y':
+                onLED= ledYellow;
+                break;
+            default:
+                onLED= ledRed;
+            }   
+            constantLights(onLED, 1, brightnessLevel);
+        }
+
+    }        
 
 
-//        sentTheData = postDataToFeed(tempC,capread);
 
-// #ifdef DEBUG
-//         if (sentTheData==true) 
-//             Serial.println("Sent data.");
-//         else 
-//             Serial.println("Didn't send data.");
-// #endif
 
-        if (thisHour != lastHour) 
-            lastHour = thisHour;
+}
 
-        if (thisMinute == 30) 
-            didTheHalfHour = 1;
-        else 
-            didTheHalfHour = 0;
+void handleTouchScreen(long whereX, long whereY) {
 
-        updateDisplay( thisHour,thisMinute,thisYear,thisMonth,thisDay);
-        lastMinute = thisMinute;
-
-        constantLights(onLED, 0, brightnessLevel);
-        switch(lightStatus) {
-        case 'G':
-            onLED= ledGreen;
+    switch (displayContext) {
+        case 1: //config
+            //home
+            if (whereX < 40 && whereY < 40) displayContext = 0; 
+            //back
+            if (whereX > 40 && whereX < 80 && whereY < 40 && selectedIdx > 0) selectedIdx = 0; 
+            //wifi 70
+            if (whereY > 40 && whereY < 80) selectedIdx = 1;
+            //plants 110
+            if (whereY > 80 && whereY < 120) selectedIdx = 2;
+            //groups 150
+            if (whereY > 120 && whereY < 160) selectedIdx = 3;
             break;
-        case 'Y':
-            onLED= ledYellow;
+        case 2: //plant
+            if (whereX < 40 && whereY < 40) { //back to home
+                displayContext = 0;
+            }
+            //direct to plant group
+            selectedIdx = 1;
             break;
-        default:
-            onLED= ledRed;
-        }   
-        constantLights(onLED, 1, brightnessLevel);
+        case 3: //group
+            if (whereX < 40 && whereY < 40) { //back to home
+                displayContext = 0;
+            }
+            selectedIdx = 1;
+            break;
+        default:  // 0 or home
+            if ( whereX > screenWidth-40 && whereY < 40) {
+                displayContext = 1;
+                selectedIdx = 0;
+                return;         
+            }
+
+            for(auto ss : soilSensors) {
+                if (ss.isOnline) {
+                    if ((whereX > ss.xloc && whereX < ss.xloc+eachFaceX) && (whereY > ss.yloc && whereY < ss.yloc+eachFaceY) ) {
+                        displayContext = 2;
+                        selectedIdx = ss.idx;
+                        break;
+                    }
+                }
+            }
+
     }
+#ifdef DEBUG
+    Serial.print("displayContext:");
+    Serial.print(displayContext);
+    Serial.print("; selectedIdx:");
+    Serial.println(selectedIdx);
 
-
+#endif
 
 }
 
@@ -490,78 +583,87 @@ bool updateDisplay(uint8_t thisHour, uint8_t thisMinute, uint16_t thisYear ,uint
     #endif
             ss.xloc=currentX;
             ss.yloc=currentY;
-            drawFaceStatus(currentX,currentY,1,status,ss.name,temp,capread);
-            currentX += eachFace;
-            if (currentX+eachFace+10 > screenWidth) {
+            drawFaceStatus(currentX,currentY,status,ss.name,temp,capread);
+            currentX += eachFaceX;
+            if (currentX+eachFaceX+10 > screenWidth) {
                 currentX = 10;
-                currentY += eachFace;
+                currentY += eachFaceY;
             }
 
         }
     }
     
-    tempAvg = tempAvg/sensorCount;
+    tft.fillRect(screenWidth-home_size_x, 0, home_size_x, home_size_y,BLACK);
+    tft.drawBitmap(screenWidth-home_size_x, 0,configBitmap,home_size_x,home_size_y, CYAN);
+
+    //tempAvg = tempAvg/sensorCount;
     
-    tft.setTextColor(CYAN);
-    tft.setCursor(360, 30);
+    // tft.setTextColor(CYAN);
+    // tft.setCursor(360, 30);
   
-    tft.setFont(&FreeSansBold18pt7b);
+    // tft.setFont(&FreeSansBold18pt7b);
    
-    if (useCelcius)  tft.printf("%.0f°C",tempAvg);
-    else  tft.printf("%.0f°F",tempAvg);
+    // if (useCelcius)  tft.printf("%.0f°C",tempAvg);
+    // else  tft.printf("%.0f°F",tempAvg);
 
 
     return true;
 }
 
-void drawFaceStatus(int16_t locX, int16_t locY, float sizePrecentage, char lightStatus_l, String plantName, float temp, uint16_t capread ) {
-    uint16_t eyeRad = 6;
+void drawFaceStatus(int16_t locX, int16_t locY, char lightStatus_l, String plantName, float temp, uint16_t capread ) {
+//    uint16_t eyeRad = 6;
 
-    if (sizePrecentage > .4) 
-        sizePrecentage = .4;
+    // if (sizePrecentage > .4) 
+    //     sizePrecentage = .4;
     
-    if (eyeRad * sizePrecentage > 2) 
-        eyeRad = eyeRad * sizePrecentage;
+    // if (eyeRad * sizePrecentage > 2) 
+    //     eyeRad = eyeRad * sizePrecentage;
     
-    tft.fillRect(locX, locY, 120*sizePrecentage,120*sizePrecentage,BLACK);
-     
+ //   tft.fillRect(locX, locY, 120*sizePrecentage,120*sizePrecentage,BLACK);
+    tft.fillRect(locX, locY, eachFaceX, eachFaceY,BLACK);
+    uint16_t xOffset = (eachFaceX-face_size_x)/2;
     switch(lightStatus_l) {
         case 'G':
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage), 30*sizePrecentage, GREEN); //smile
-            tft.fillRect(locX, locY, 100*sizePrecentage,66*sizePrecentage,BLACK);
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),(50*sizePrecentage), GREEN); //head
-            tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, GREEN);
-            tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, GREEN);
+
+            tft.drawBitmap(locX+xOffset,locY,happyfaceBitmap,face_size_x,face_size_y,GREEN);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage), 30*sizePrecentage, GREEN); //smile
+            // tft.fillRect(locX, locY, 100*sizePrecentage,66*sizePrecentage,BLACK);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),(50*sizePrecentage), GREEN); //head
+            // tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, GREEN);
+            // tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, GREEN);
             tft.setTextColor(GREEN);
             break;
         case 'Y':
-            tft.drawLine(locX+(20*sizePrecentage),locY+(70*sizePrecentage), locX+(80*sizePrecentage),locY+(70*sizePrecentage), YELLOW);
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage) ,50*sizePrecentage, YELLOW);
-            tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, YELLOW);
-            tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, YELLOW);
+            tft.drawBitmap(locX+xOffset,locY,mehfaceBitmap,face_size_x,face_size_y,YELLOW);
+            // tft.drawLine(locX+(20*sizePrecentage),locY+(70*sizePrecentage), locX+(80*sizePrecentage),locY+(70*sizePrecentage), YELLOW);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage) ,50*sizePrecentage, YELLOW);
+            // tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, YELLOW);
+            // tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, YELLOW);
             tft.setTextColor(YELLOW);
             break;
         case 'B':
-            tft.drawLine(locX+(20*sizePrecentage),locY+(70*sizePrecentage), locX+(80*sizePrecentage),locY+(70*sizePrecentage), BLUE);
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),50*sizePrecentage, BLUE);
-            tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, BLUE);
-            tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, BLUE);
+            tft.drawBitmap(locX+xOffset,locY,mehfaceBitmap,face_size_x,face_size_y,BLUE);
+            // tft.drawLine(locX+(20*sizePrecentage),locY+(70*sizePrecentage), locX+(80*sizePrecentage),locY+(70*sizePrecentage), BLUE);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),50*sizePrecentage, BLUE);
+            // tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, BLUE);
+            // tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, BLUE);
             tft.setTextColor(BLUE);
             break;
         default:
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(105*sizePrecentage), 40*sizePrecentage, RED); //frown
-            tft.fillRect(locX, locY+(75*sizePrecentage), 100*sizePrecentage,40*sizePrecentage,BLACK);
-            tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),(50*sizePrecentage), RED); //head
-            tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, RED);
-            tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, RED);
+            tft.drawBitmap(locX+xOffset,locY,sadfaceBitmap,face_size_x,face_size_y,RED);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(105*sizePrecentage), 40*sizePrecentage, RED); //frown
+            // tft.fillRect(locX, locY+(75*sizePrecentage), 100*sizePrecentage,40*sizePrecentage,BLACK);
+            // tft.drawCircle(locX+(50*sizePrecentage), locY+(50*sizePrecentage),(50*sizePrecentage), RED); //head
+            // tft.fillCircle(locX+(30*sizePrecentage), locY+(30*sizePrecentage), eyeRad, RED);
+            // tft.fillCircle(locX+(70*sizePrecentage), locY+(30*sizePrecentage), eyeRad, RED);
             tft.setTextColor(RED);
     } 
 
     tft.setFont(&FreeSans9pt7b);
-    tft.setCursor(locX-(10*sizePrecentage), locY+(130*sizePrecentage));
+    tft.setCursor(locX-(10), locY+face_size_y+13);
     tft.print(plantName);
 
-    tft.setCursor(locX-(10*sizePrecentage), locY+(130*sizePrecentage)+17);
+    tft.setCursor(locX-(10), locY+face_size_y+30);
  
     tft.print("Hydro: ");
     tft.println(capread);
@@ -583,9 +685,96 @@ void printMessage(int16_t locX, int16_t locY, String message, bool isErrorMessag
 //     tsTouched = 1;
 
 // }    
+void showHome() {
+    tft.fillRect(0, 0, home_size_x, home_size_y,BLACK);
+    tft.drawBitmap(0, 0,homeBitmap,home_size_x,home_size_y, CYAN);
+}
 
 
-void printWifiStatus() {
+void showBack() {
+    tft.fillRect(0, 0, home_size_x, home_size_y*2,BLACK);
+    tft.drawBitmap(0, 0,homeBitmap,home_size_x,home_size_y, CYAN);
+    tft.drawBitmap(41, 0,backBitmap,home_size_x,home_size_y, CYAN);
+}
+
+void showConfig(bool needsUpdate) {
+
+    if (needsUpdate) {
+    
+        tft.fillScreen(BLACK);
+
+        tft.setTextColor(CYAN);
+
+        switch(selectedIdx) {
+        case 0:
+            showHome();    
+            tft.setCursor(45, 30);
+            tft.setFont(&FreeSansBold18pt7b);
+            tft.print("CONFIGURATION");
+            tft.setFont(&FreeSansBold12pt7b);
+            tft.setCursor(15, 70);    
+            tft.print("* WIFI SETTINGS");
+            tft.setCursor(15, 110);    
+            tft.print("* PLANTS & SENSORS SETUP");
+            tft.setCursor(15, 150);    
+            tft.print("* PLANT GROUP SETUP");
+        break;
+        case 1: //wifi settings
+            showBack();    
+            tft.setCursor(85, 30);
+            tft.setFont(&FreeSansBold18pt7b);
+            tft.print("CONFIGURATION>WIFI STATUS");
+            printWifiStatus(50,true);
+        break;
+        case 2: //sensors and plants
+            showBack();    
+            tft.setCursor(85, 30);
+            tft.print("CONFIGURATION>PLANTS & SENSORS");
+            tft.fillRect(0,50,screenWidth,screenHeight-50,BLACK);        
+
+        break;
+        case 3: //plant groups
+            showBack();    
+            tft.setCursor(85, 30);
+            tft.print("CONFIGURATION>PLANT GROUPS");
+            tft.fillRect(0,50,screenWidth,screenHeight-50,BLACK);        
+        break;
+
+
+        }
+    }
+}
+
+
+
+
+void showPlantDetails(bool needsUpdate) {
+    if (needsUpdate) {
+        tft.fillScreen(BLACK);
+        showHome();
+        for(auto ss : soilSensors) {
+            if (ss.idx == selectedIdx) {
+
+                break;
+            }
+        }
+    }   
+}
+void showGroupDetails(bool needsUpdate) {
+    if (needsUpdate) {
+        tft.fillScreen(BLACK);
+        showHome();
+        for(auto pg : plantGroups) {
+            if (pg.idx == selectedIdx) {
+    
+
+
+                break;
+            }
+        }
+    }
+}
+void printWifiStatus(int16_t locY, bool showBackButton) {
     // print the SSID of the network you're attached to:
     IPAddress ip = WiFi.localIP();
     long rssi = WiFi.RSSI();
@@ -609,8 +798,10 @@ void printWifiStatus() {
 #endif
     tft.setFont(&FreeSans9pt7b);
     tft.fillScreen(BLACK);
+    //if you want the back button allow for 40x40 in the upper left corner.
+    if (showBackButton) showBack(); 
     tft.setTextColor(CYAN);
-    tft.setCursor(0, 15);
+    tft.setCursor(0, locY);
     tft.print("SSID: ");
     tft.println(currectSSID);
     // print your board's IP address:
@@ -643,7 +834,8 @@ bool readConfig() {
         return false;
     }
 
-
+    uint8_t plantCount = 0;
+    uint8_t groupCount = 0;
 
     while (green_thumb_conf.available()) {
         String line = green_thumb_conf.readStringUntil('\n');
@@ -697,7 +889,7 @@ bool readConfig() {
 #endif
 
             if (mux_addr >= 0x70 && mux_addr <= 0x77 && port_number >= 0 && port_number <= 7) {
-                soilSensors.push_back({name,groupname,Adafruit_seesaw(&Wire),mux_addr,port_number});
+                soilSensors.push_back({plantCount++,name,groupname,Adafruit_seesaw(&Wire),mux_addr,port_number});
 /*
                 soilSensor newSensor;
                 newSensor.name = name;
@@ -755,7 +947,7 @@ bool readConfig() {
             
 
             if (overWaterThreshold > greenThreshold && greenThreshold>yellowThreshold && yellowThreshold > 0) {
-                plantGroups.push_back({groupname,greenThreshold,yellowThreshold,overWaterThreshold});
+                plantGroups.push_back({groupCount++,groupname,greenThreshold,yellowThreshold,overWaterThreshold});
             }
             else {
                 //need error handling.
